@@ -10,6 +10,7 @@ outputs/
 *.air
 *.metallib
 h3
+h3_server
 h3_*test
 h3_*tests
 h3_*bench
