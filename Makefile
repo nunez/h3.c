@@ -19,9 +19,12 @@ CLI_OBJ := main.o h3_cli.o linenoise.o
 
 .PHONY: all test parity real-parity clean
 
-all: h3 libh3.a
+all: h3 h3_server libh3.a
 
 h3: $(CLI_OBJ) $(LIB_OBJ)
+	$(CC) -o $@ $^ $(LDLIBS)
+
+h3_server: h3_server_main.o h3_server.o $(LIB_OBJ)
 	$(CC) -o $@ $^ $(LDLIBS)
 
 libh3.a: $(LIB_OBJ)
