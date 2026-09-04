@@ -20,9 +20,13 @@
 
     <!-- Enable step-distilled turbo mode for remote callers that pass
          "turbo":1 in the request body. The turbo LoRA is auto-resolved from
-         the model directory (loras_larryvrh/). Remove to disable turbo. -->
+         the model directory (loras_larryvrh/). Remove to disable turbo.
+         PATH is set explicitly because launchd does not inherit the shell
+         PATH; FFmpeg lives in Homebrew's bin. -->
     <key>EnvironmentVariables</key>
     <dict>
+        <key>PATH</key>
+        <string>/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
         <key>H3_LORA_PATH</key>
         <string>/Users/steven/src/h3.c/MiniMax-H3/loras_larryvrh/minimax_h3_turbo_v4_step600_ema.safetensors</string>
     </dict>
