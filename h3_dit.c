@@ -1,6 +1,7 @@
 #include "h3_dit.h"
 
 #include "h3_dit_schedule.h"
+#include "h3_lora.h"
 #include "h3_weights.h"
 
 #include <math.h>
@@ -71,6 +72,7 @@ struct h3_dit {
     h3_gpu *gpu;
     h3_weight_store *weights;
     h3_dit_schedule *schedule;
+    const h3_lora *lora;
     int fused_mlp;
     int nax_mlp;
     int int8_mlp;
@@ -522,6 +524,22 @@ static int load_block(h3_dit *dit, h3_dit_block *block, const char *prefix,
     LOAD2(fc2, "mlp.fc2.weight", HIDDEN, FFN);
 #undef LOAD1
 #undef LOAD2
+    if (dit->lora) {
+        char weight_name[160];
+#define FOLD(field, suffix) do {                                            \
+    snprintf(weight_name, sizeof(weight_name), "%s%s", prefix, suffix);    \
+    if (!h3_lora_fold(dit->lora, dit->gpu, block->field, weight_name,      \
+                      error, error_size)) return 0;                         \
+} while (0)
+        FOLD(qkv, "attn.qkv_proj.weight");
+        FOLD(out, "attn.out_proj.weight");
+        FOLD(fc1, "mlp.fc1.weight");
+        FOLD(fc2, "mlp.fc2.weight");
+#undef FOLD
+        if (getenv("H3_PROFILE"))
+            fprintf(stderr, "h3: folded turbo LoRA into %s (scale %.4g)\n",
+                    prefix, h3_lora_scale(dit->lora));
+    }
     return 1;
 }
 
@@ -1599,6 +1617,21 @@ static h3_dit *load_dit(const char *weight_directory,
         return NULL;
     }
     dit->fused_mlp = getenv("H3_DISABLE_FUSED_MLP") == NULL;
+    /* Optional step-distilled LoRA, folded into the loaded BF16 block weights
+     * before any int8 quantization. Selected with H3_LORA_PATH so the public
+     * load functions need no extra parameter. Turbo requires the in-memory
+     * weight path, so SSD streaming is disabled when a LoRA is active. */
+    const char *lora_path = getenv("H3_LORA_PATH");
+    if (lora_path && *lora_path) {
+        dit->lora = h3_lora_open(lora_path, error, error_size);
+        if (!dit->lora) goto failed;
+        if (ssd_streaming) {
+            fail(error, error_size,
+                 "H3_LORA_PATH cannot be combined with SSD streaming; "
+                 "unset H3_SSD_STREAMING or H3_LORA_PATH");
+            goto failed;
+        }
+    }
     /* The released final heads are F32, but their inputs are already BF16.
      * Converting these small weights once selects the Iris-derived tiled
      * linear and eliminates two full-width casts plus the scalar F32 kernel.
@@ -3045,6 +3078,7 @@ void h3_dit_free(h3_dit *dit) {
     FREE(previous_audio_velocity); FREE(previous_video_velocity);
 #undef FREE
     h3_dit_schedule_free(dit->schedule);
+    h3_lora_free((h3_lora *)dit->lora);
     if (dit->ssd_streaming && getenv("H3_PROFILE")) {
         double gib = (double)dit->stream_bytes / (1024.0 * 1024.0 * 1024.0);
         fprintf(stderr,

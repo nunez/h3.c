@@ -1,5 +1,7 @@
 #include "h3_dit_schedule.h"
 
+#include "h3_lora.h"
+
 #include <math.h>
 #include <stdarg.h>
 #include <stdio.h>
@@ -252,6 +254,16 @@ h3_dit_schedule *h3_dit_schedule_precompute(
         return NULL;
     }
     schedule->gpu = gpu;
+    /* Optional step-distilled LoRA may also fold the AdaLN projection. */
+    h3_lora *lora = NULL;
+    const char *lora_path = getenv("H3_LORA_PATH");
+    if (lora_path && *lora_path) {
+        lora = h3_lora_open(lora_path, error, error_size);
+        if (!lora) {
+            h3_dit_schedule_free(schedule);
+            return NULL;
+        }
+    }
     float *features = NULL;
     if (!prepare_rows(schedule, sigmas, visual_condition, audio_condition,
                       &features, error, error_size)) goto failed;
@@ -272,6 +284,8 @@ h3_dit_schedule *h3_dit_schedule_precompute(
             error, error_size);
         h3_gpu_tensor *bias = weight_bf16_1d(
             weights, gpu, bias_name, BLOCK_OUTPUT, error, error_size);
+        if (lora && weight)
+            h3_lora_fold(lora, gpu, weight, weight_name, error, error_size);
         schedule->blocks[block] = h3_gpu_tensor_new_bf16(
             gpu, (size_t)schedule->time_rows * BLOCK_OUTPUT);
         if (!weight || !bias || !schedule->blocks[block]) {
@@ -306,6 +320,10 @@ h3_dit_schedule *h3_dit_schedule_precompute(
     h3_gpu_tensor *final_b = weight_bf16_1d(
         weights, gpu, "final_layer.adaln_proj.linear.bias",
         FINAL_OUTPUT, error, error_size);
+    if (lora && final_w)
+        h3_lora_fold(lora, gpu, final_w,
+                     "final_layer.adaln_proj.linear.weight",
+                     error, error_size);
     schedule->final = h3_gpu_tensor_new_bf16(
         gpu, (size_t)schedule->time_rows * FINAL_OUTPUT);
     if (!final_w || !final_b || !schedule->final ||
@@ -328,10 +346,12 @@ h3_dit_schedule *h3_dit_schedule_precompute(
     free_tensor(&final_w);
     free_tensor(&final_b);
     h3_gpu_tensor_free(time);
+    h3_lora_free(lora);
     return schedule;
 
 failed:
     free(features);
+    h3_lora_free(lora);
     h3_dit_schedule_free(schedule);
     return NULL;
 }

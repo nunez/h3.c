@@ -121,6 +121,11 @@ typedef struct {
     int use_slower_dynamic_fc1_k;
     /* Force the original 256-thread FC2 grouped activation quantizer. */
     int use_slower_grouped_quantizer;
+    /* Step-distilled turbo mode. Selects the reduced-shift turbo sigma schedule
+     * (video shift 6) and, when the lightweightx2v 8-step LoRA is installed,
+     * folds it into the DiT weights. The distilled weights are tuned for a low
+     * step count (4 or 8), which the caller should also set. */
+    int turbo;
     /* Decode and deliver one representative frame after every Euler step. */
     int preview_denoise;
     h3_frame_callback on_frame;
@@ -131,7 +136,7 @@ typedef struct {
 #define H3_PARAMS_DEFAULT { \
     H3_DEFAULT_WIDTH, H3_DEFAULT_HEIGHT, H3_DEFAULT_FRAMES, H3_DEFAULT_STEPS, \
     UINT64_C(42), NULL, NULL, NULL, NULL, 0, H3_REFERENCE_IMAGE_MATCH, \
-    1, H3_DEFAULT_DIT_LAYERS, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, NULL, NULL, NULL \
+    1, H3_DEFAULT_DIT_LAYERS, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, NULL, NULL, NULL \
 }
 
 typedef struct {

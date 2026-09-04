@@ -117,6 +117,31 @@ static void test_schedule(void) {
     }
     CHECK(!h3_serving_schedule_build(1, &schedule));
     CHECK(!h3_serving_schedule_build(H3_MAX_STEPS + 1, &schedule));
+
+    /* Turbo (step-distilled) schedule: same linear base grid as serving but
+     * with the reduced video shift of 6. Audio stays at shift 3. */
+    CHECK(h3_turbo_schedule_build(4, &schedule));
+    CHECK(schedule.steps == 4);
+    CHECK(schedule.video[0] == 1.0f && schedule.audio[0] == 1.0f);
+    /* video[1] uses base 0.75 with shift 6: 6*0.75/(1+5*0.75) = 4.5/4.75. */
+    CHECK(close_enough(schedule.video[1], 4.5f / 4.75f, 1e-7));
+    /* audio[1] uses base 0.75 with shift 3: 3*0.75/(1+2*0.75) = 2.25/2.5. */
+    CHECK(close_enough(schedule.audio[1], 2.25f / 2.5f, 1e-7));
+    CHECK(schedule.video[4] == 0.0f && schedule.audio[4] == 0.0f);
+    /* Turbo video shift (6) yields a smaller first step than the serving
+     * shift (12) at the same base: video[1]_turbo < video[1]_serving. */
+    {
+        h3_sigma_schedule serving;
+        h3_serving_schedule_build(4, &serving);
+        CHECK(schedule.video[1] < serving.video[1]);
+        CHECK(schedule.audio[1] == serving.audio[1]);
+    }
+    for (int index = 0; index < schedule.steps; index++) {
+        CHECK(schedule.video[index] > schedule.video[index + 1]);
+        CHECK(schedule.audio[index] > schedule.audio[index + 1]);
+    }
+    CHECK(!h3_turbo_schedule_build(1, &schedule));
+    CHECK(!h3_turbo_schedule_build(H3_MAX_STEPS + 1, &schedule));
 }
 
 static void test_dit_reuse_schedule(void) {

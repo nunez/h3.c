@@ -11,6 +11,8 @@
 #define H3_VAE_SPATIAL_RATIO 16
 #define H3_VIDEO_SIGMA_SHIFT 12.0
 #define H3_AUDIO_SIGMA_SHIFT 3.0
+/* Reduced video shift used by the step-distilled turbo LoRA schedule. */
+#define H3_TURBO_VIDEO_SIGMA_SHIFT 6.0f
 #define H3_MAX_STEPS 1000
 
 typedef struct {
@@ -114,6 +116,8 @@ double h3_time_shift_slope(double sigma, double from_shift, double to_shift);
 int h3_schedule_build(int steps, h3_sigma_schedule *schedule);
 /* Released linear base grid: evaluations model forwards plus terminal zero. */
 int h3_serving_schedule_build(int evaluations, h3_sigma_schedule *schedule);
+/* Step-distilled turbo grid: same linear base, reduced video shift (6). */
+int h3_turbo_schedule_build(int evaluations, h3_sigma_schedule *schedule);
 
 int h3_layout_build(const h3_layout_spec *spec, h3_layout *layout,
                     char *error, size_t error_size);

@@ -933,6 +933,36 @@ h3_result *h3_generate(h3_ctx *ctx, const char *prompt,
         h3_set_error(ctx, "out of memory resolving generation model paths");
         goto cleanup;
     }
+    /* Step-distilled turbo mode folds a LoRA into the DiT weights. If the
+     * caller did not name one explicitly, resolve a known 8-step turbo adapter
+     * placed under the model directory (loras/ or the model root). */
+    if (params->turbo && (!getenv("H3_LORA_PATH") ||
+                          !*getenv("H3_LORA_PATH"))) {
+        /* Native (checkpoint-keyed, AdaLN-inclusive) adapters fold fastest and
+         * are preferred. The larryvrh 4-step turbo is the validated choice. */
+        const char *candidates[] = {
+            "loras/minimax_h3_turbo_v4_step600_ema.safetensors",
+            "loras_larryvrh/minimax_h3_turbo_v4_step600_ema.safetensors",
+            "minimax_h3_turbo_v4_step600_ema.safetensors",
+            "loras/minimax_h3_fl2v_turbo_8step_v1.0_768p_bf16.safetensors",
+            "minimax_h3_fl2v_turbo_8step_v1.0_768p_bf16.safetensors",
+            NULL
+        };
+        for (int index = 0; candidates[index]; index++) {
+            char *candidate = h3_path(ctx->model_dir, candidates[index]);
+            if (candidate && h3_is_file(candidate)) {
+                if (setenv("H3_LORA_PATH", candidate, 1) != 0) {
+                    free(candidate);
+                    h3_set_error(ctx,
+                        "cannot set H3_LORA_PATH for turbo mode");
+                    goto cleanup;
+                }
+                free(candidate);
+                break;
+            }
+            free(candidate);
+        }
+    }
     conditioning_key = h3_conditioning_key(
         prompt, params, render_width, render_height, ref2va);
     if (!conditioning_key) {
@@ -1456,7 +1486,10 @@ h3_result *h3_generate(h3_ctx *ctx, const char *prompt,
         goto cleanup;
     }
     h3_sigma_schedule sigmas;
-    if (!h3_serving_schedule_build(params->steps, &sigmas)) {
+    int schedule_ok = params->turbo
+        ? h3_turbo_schedule_build(params->steps, &sigmas)
+        : h3_serving_schedule_build(params->steps, &sigmas);
+    if (!schedule_ok) {
         h3_set_error(ctx, "cannot construct the requested sigma schedule");
         goto cleanup;
     }

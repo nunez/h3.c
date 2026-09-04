@@ -164,6 +164,27 @@ int h3_serving_schedule_build(int evaluations, h3_sigma_schedule *schedule) {
     return 1;
 }
 
+/* Turbo (step-distilled) serving schedule. Identical linear base grid to the
+ * serving schedule, but with the reduced video shift (6) that the distilled
+ * LoRA was trained on; audio stays at the released shift of 3. The distilled
+ * weights expect a low NFE (typically 4 or 8) on this schedule. */
+int h3_turbo_schedule_build(int evaluations, h3_sigma_schedule *schedule) {
+    if (!schedule || evaluations < 2 || evaluations > H3_MAX_STEPS) return 0;
+    memset(schedule, 0, sizeof(*schedule));
+    schedule->steps = evaluations;
+    float denominator = (float)evaluations;
+    for (int index = 0; index <= evaluations; index++) {
+        float base = 1.0f - (float)index / denominator;
+        schedule->video[index] = H3_TURBO_VIDEO_SIGMA_SHIFT * base /
+            (1.0f + (H3_TURBO_VIDEO_SIGMA_SHIFT - 1.0f) * base);
+        schedule->audio[index] = (float)H3_AUDIO_SIGMA_SHIFT * base /
+            (1.0f + ((float)H3_AUDIO_SIGMA_SHIFT - 1.0f) * base);
+    }
+    schedule->video[evaluations] = 0.0f;
+    schedule->audio[evaluations] = 0.0f;
+    return 1;
+}
+
 typedef struct {
     h3_layout *layout;
     size_t position_capacity;
