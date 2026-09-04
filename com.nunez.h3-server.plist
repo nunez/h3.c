@@ -1,0 +1,47 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.nunez.h3-server</string>
+
+    <key>ProgramArguments</key>
+    <array>
+        <string>/Users/steven/src/h3.c/h3_server</string>
+        <string>-d</string>
+        <string>/Users/steven/src/h3.c/MiniMax-H3</string>
+        <string>--host</string>
+        <string>0.0.0.0</string>
+        <string>--port</string>
+        <string>8083</string>
+        <string>--output-dir</string>
+        <string>/Users/steven/src/h3.c/outputs</string>
+    </array>
+
+    <!-- Enable step-distilled turbo mode for remote callers that pass
+         "turbo":1 in the request body. The turbo LoRA is auto-resolved from
+         the model directory (loras_larryvrh/). Remove to disable turbo. -->
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>H3_LORA_PATH</key>
+        <string>/Users/steven/src/h3.c/MiniMax-H3/loras_larryvrh/minimax_h3_turbo_v4_step600_ema.safetensors</string>
+    </dict>
+
+    <key>WorkingDirectory</key>
+    <string>/Users/steven/src/h3.c</string>
+
+    <key>RunAtLoad</key>
+    <true/>
+    <key>KeepAlive</key>
+    <true/>
+
+    <key>StandardOutPath</key>
+    <string>/Users/steven/src/h3.c/logs/h3-server.out.log</string>
+    <key>StandardErrorPath</key>
+    <string>/Users/steven/src/h3.c/logs/h3-server.err.log</string>
+
+    <!-- The server binds an HTTP port; allow launchd to manage it. -->
+    <key>Sockets</key>
+    <false/>
+</dict>
+</plist>
