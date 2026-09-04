@@ -623,7 +623,7 @@ static job *job_create(const http_request *req, char *error, size_t error_len) {
         goto fail;
     }
     int w = 0, h = 0, frames = 0, steps = 0, reuse = 0, layers = 0,
-        core = 0;
+        core = 0, turbo = 0;
     double d;
     if (json_number(json_object_get(body, "width"), &d)) w = (int)d;
     if (json_number(json_object_get(body, "height"), &d)) h = (int)d;
@@ -632,6 +632,7 @@ static job *job_create(const http_request *req, char *error, size_t error_len) {
     if (json_number(json_object_get(body, "denoise_reuse"), &d)) reuse = (int)d;
     if (json_number(json_object_get(body, "dit_layers"), &d)) layers = (int)d;
     if (json_number(json_object_get(body, "core_reuse"), &d)) core = (int)d;
+    if (json_number(json_object_get(body, "turbo"), &d)) turbo = (int)d;
     if (w > 0) j->params.width = w;
     if (h > 0) j->params.height = h;
     if (frames > 0) j->params.frames = frames;
@@ -639,6 +640,7 @@ static job *job_create(const http_request *req, char *error, size_t error_len) {
     if (reuse > 0) j->params.denoise_reuse = reuse;
     if (layers > 0) j->params.dit_layers = layers;
     if (core > 0) j->params.core_reuse = core;
+    if (turbo) j->params.turbo = turbo;
     const json_value *seconds = json_object_get(body, "seconds");
     if (seconds && json_number(seconds, &d) && d > 0)
         j->params.frames = (int)(d * 24.0);
