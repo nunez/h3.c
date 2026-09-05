@@ -934,13 +934,17 @@ h3_result *h3_generate(h3_ctx *ctx, const char *prompt,
         goto cleanup;
     }
     /* Step-distilled turbo mode folds a LoRA into the DiT weights. If the
-     * caller did not name one explicitly, resolve a known 8-step turbo adapter
-     * placed under the model directory (loras/ or the model root). */
+     * caller did not name one explicitly, resolve a known turbo adapter placed
+     * under the model directory. Ref2VA jobs select the ref2v adapter; prompt-
+     * only / first-last-frame jobs prefer the native (checkpoint-keyed,
+     * AdaLN-inclusive) FL2VA adapter, which folds fastest. */
     if (params->turbo && (!getenv("H3_LORA_PATH") ||
                           !*getenv("H3_LORA_PATH"))) {
-        /* Native (checkpoint-keyed, AdaLN-inclusive) adapters fold fastest and
-         * are preferred. The larryvrh 4-step turbo is the validated choice. */
         const char *candidates[] = {
+            /* Ref2VA (reference-conditioned): diffusers-keyed 8-step adapter. */
+            "loras/minimax_h3_ref2v_turbo_8step_v1.0_768p_bf16.safetensors",
+            "minimax_h3_ref2v_turbo_8step_v1.0_768p_bf16.safetensors",
+            /* FL2VA: native larryvrh 4-step preferred, then lightx2v 8-step. */
             "loras/minimax_h3_turbo_v4_step600_ema.safetensors",
             "loras_larryvrh/minimax_h3_turbo_v4_step600_ema.safetensors",
             "minimax_h3_turbo_v4_step600_ema.safetensors",
@@ -948,7 +952,9 @@ h3_result *h3_generate(h3_ctx *ctx, const char *prompt,
             "minimax_h3_fl2v_turbo_8step_v1.0_768p_bf16.safetensors",
             NULL
         };
-        for (int index = 0; candidates[index]; index++) {
+        /* Only Ref2VA jobs should use the ref2v adapter; skip it for FL2VA. */
+        int start = ref2va ? 0 : 2;
+        for (int index = start; candidates[index]; index++) {
             char *candidate = h3_path(ctx->model_dir, candidates[index]);
             if (candidate && h3_is_file(candidate)) {
                 if (setenv("H3_LORA_PATH", candidate, 1) != 0) {
