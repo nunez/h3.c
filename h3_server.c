@@ -368,6 +368,8 @@ typedef struct {
     job_status status;
     char *prompt;
     h3_params params;
+    h3_reference references[12];
+    size_t reference_count;
     char output_path[JOB_PATH_MAX];
     char error[JOB_ERROR_MAX];
     long long created_at;
@@ -648,6 +650,30 @@ static job *job_create(const http_request *req, char *error, size_t error_len) {
     if (seed && json_number(seed, &d) && d >= 0)
         j->params.seed = (uint64_t)d;
 
+    /* Ordered reference images for Ref2VA. Each element is a path on the
+     * server machine to a JPEG/PNG/WebP file. Up to 12 references. */
+    const json_value *refs = json_object_get(body, "reference_image_paths");
+    if (refs && refs->type == JSON_ARRAY) {
+        for (size_t i = 0; i < refs->u.array.count; i++) {
+            if (j->reference_count >= 12) break;
+            const json_value *item = refs->u.array.items[i];
+            const char *path = json_string(item);
+            if (!path || !*path) continue;
+            char *copy = strdup(path);
+            if (!copy) {
+                snprintf(error, error_len, "out of memory for reference path");
+                goto fail;
+            }
+            j->references[j->reference_count].kind = H3_REFERENCE_IMAGE;
+            j->references[j->reference_count].path = copy;
+            j->references[j->reference_count].audio_path = NULL;
+            j->references[j->reference_count].include_embedded_audio = 0;
+            j->reference_count++;
+        }
+    }
+    j->params.references = j->reference_count ? j->references : NULL;
+    j->params.reference_count = j->reference_count;
+
     generate_id(j->id, JOB_ID_LEN);
     j->status = JOB_QUEUED;
     j->created_at = now_ms();
@@ -664,6 +690,8 @@ static job *job_create(const http_request *req, char *error, size_t error_len) {
 
 fail:
     json_free(body);
+    for (size_t i = 0; i < j->reference_count; i++)
+        free((char *)j->references[i].path);
     free(j->prompt);
     free(j);
     return NULL;
