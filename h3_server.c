@@ -355,6 +355,8 @@ static void jw_escape(json_writer *w, const char *s) {
 #define JOB_ID_LEN 16
 #define JOB_PATH_MAX 1024
 #define JOB_ERROR_MAX 512
+/* Max HTTP request body (base64 reference images can be a few MB each). */
+#define H3_SERVER_MAX_BODY (64u * 1024 * 1024)
 
 typedef enum {
     JOB_QUEUED,
@@ -433,8 +435,21 @@ static void job_set_status(job *j, job_status status) {
     pthread_mutex_unlock(&g_lock);
 }
 
+static void job_free_refs(job *j) {
+    if (!j) return;
+    for (size_t i = 0; i < j->reference_count; i++) {
+        const char *path = j->references[i].path;
+        if (path && !strncmp(path, "/tmp/h3ref-", 11)) unlink(path);
+        free((char *)path);
+        j->references[i].path = NULL;
+    }
+    j->reference_count = 0;
+}
+
 static void generate_job(job *j) {
     h3_result *result = h3_generate(g_ctx, j->prompt, &j->params);
+    /* Uploaded reference images are only needed during generation. */
+    job_free_refs(j);
     if (!result) {
         const char *err = h3_last_error(g_ctx);
         snprintf(j->error, sizeof(j->error), "%s",
@@ -507,7 +522,10 @@ static void send_error(int fd, int status, const char *reason,
 }
 
 static int parse_request(int fd, http_request *req) {
-    char buf[8192];
+    /* Read headers into a bounded buffer, then read the body separately based
+     * on Content-Length. The body may be large (base64 reference images), so
+     * it is capped at H3_SERVER_MAX_BODY. */
+    char buf[16384];
     size_t used = 0;
     int header_done = 0;
     size_t header_end = 0;
@@ -556,11 +574,25 @@ static int parse_request(int fd, http_request *req) {
             body_len = (size_t)strtoul(p + 15, NULL, 10);
         p = nl + 2;
     }
+    if (body_len > H3_SERVER_MAX_BODY) return 0;
+
+    /* Copy any body bytes already read with the headers. */
     size_t avail = used - header_end;
-    if (body_len > avail) return 0;
+    size_t got = avail < body_len ? avail : body_len;
     req->body = malloc(body_len + 1);
     if (!req->body) return 0;
-    memcpy(req->body, body_pos, body_len);
+    memcpy(req->body, body_pos, got);
+
+    /* Read the remainder of the body, if any. */
+    while (got < body_len) {
+        ssize_t n = read(fd, req->body + got, body_len - got);
+        if (n <= 0) {
+            free(req->body);
+            req->body = NULL;
+            return 0;
+        }
+        got += (size_t)n;
+    }
     req->body[body_len] = '\0';
     req->body_len = body_len;
     return 1;
@@ -568,6 +600,41 @@ static int parse_request(int fd, http_request *req) {
 
 static void free_request(http_request *req) {
     free(req->body);
+}
+
+/* Decode a base64 string into newly allocated bytes. Returns the byte count
+ * and sets *out (NULL on invalid input). Whitespace is skipped. */
+static size_t base64_decode(const char *in, size_t in_len, unsigned char **out) {
+    static const signed char table[256] = {
+        ['A']=0,['B']=1,['C']=2,['D']=3,['E']=4,['F']=5,['G']=6,['H']=7,
+        ['I']=8,['J']=9,['K']=10,['L']=11,['M']=12,['N']=13,['O']=14,['P']=15,
+        ['Q']=16,['R']=17,['S']=18,['T']=19,['U']=20,['V']=21,['W']=22,['X']=23,
+        ['Y']=24,['Z']=25,['a']=26,['b']=27,['c']=28,['d']=29,['e']=30,['f']=31,
+        ['g']=32,['h']=33,['i']=34,['j']=35,['k']=36,['l']=37,['m']=38,['n']=39,
+        ['o']=40,['p']=41,['q']=42,['r']=43,['s']=44,['t']=45,['u']=46,['v']=47,
+        ['w']=48,['x']=49,['y']=50,['z']=51,['0']=52,['1']=53,['2']=54,['3']=55,
+        ['4']=56,['5']=57,['6']=58,['7']=59,['8']=60,['9']=61,['+']=62,['/']=63
+    };
+    *out = NULL;
+    if (!in || in_len > (size_t)-1 / 4) return 0;
+    unsigned char *buf = malloc(in_len / 4 * 3 + 3);
+    if (!buf) return 0;
+    size_t out_len = 0, acc = 0;
+    int bits = 0;
+    for (size_t i = 0; i < in_len; i++) {
+        unsigned char c = (unsigned char)in[i];
+        if (c == '\n' || c == '\r' || c == ' ' || c == '\t') continue;
+        if (c == '=') break;
+        if (table[c] < 0) { free(buf); return 0; }
+        acc = (acc << 6) | (unsigned)table[c];
+        bits += 6;
+        if (bits >= 8) {
+            bits -= 8;
+            buf[out_len++] = (unsigned char)((acc >> bits) & 0xff);
+        }
+    }
+    *out = buf;
+    return out_len;
 }
 
 static void generate_id(char *out, size_t len) {
@@ -674,6 +741,52 @@ static job *job_create(const http_request *req, char *error, size_t error_len) {
     j->params.references = j->reference_count ? j->references : NULL;
     j->params.reference_count = j->reference_count;
 
+    /* Alternatively accept base64-encoded images, decoded to temp files. This
+     * lets remote callers upload images without a server-side path. The temp
+     * file path is stored in the reference and cleaned up with the job. */
+    const json_value *b64refs = json_object_get(body, "reference_images");
+    if (b64refs && b64refs->type == JSON_ARRAY) {
+        for (size_t i = 0; i < b64refs->u.array.count; i++) {
+            if (j->reference_count >= 12) break;
+            const json_value *item = b64refs->u.array.items[i];
+            const char *b64 = json_string(item);
+            if (!b64 || !*b64) continue;
+            unsigned char *raw = NULL;
+            size_t raw_len = base64_decode(b64, strlen(b64), &raw);
+            if (!raw || !raw_len) {
+                free(raw);
+                snprintf(error, error_len, "invalid base64 in reference_images[%zu]",
+                         i);
+                goto fail;
+            }
+            char path[512];
+            char tmpname[32];
+            snprintf(tmpname, sizeof(tmpname), "h3ref-%08x-", (unsigned)rand());
+            snprintf(path, sizeof(path), "/tmp/%s%zu.png", tmpname, i);
+            FILE *f = fopen(path, "wb");
+            if (!f || fwrite(raw, 1, raw_len, f) != raw_len) {
+                if (f) fclose(f);
+                free(raw);
+                snprintf(error, error_len, "cannot write reference image");
+                goto fail;
+            }
+            fclose(f);
+            free(raw);
+            char *copy = strdup(path);
+            if (!copy) {
+                snprintf(error, error_len, "out of memory for reference image");
+                goto fail;
+            }
+            j->references[j->reference_count].kind = H3_REFERENCE_IMAGE;
+            j->references[j->reference_count].path = copy;
+            j->references[j->reference_count].audio_path = NULL;
+            j->references[j->reference_count].include_embedded_audio = 0;
+            j->reference_count++;
+        }
+    }
+    j->params.references = j->reference_count ? j->references : NULL;
+    j->params.reference_count = j->reference_count;
+
     generate_id(j->id, JOB_ID_LEN);
     j->status = JOB_QUEUED;
     j->created_at = now_ms();
@@ -690,8 +803,7 @@ static job *job_create(const http_request *req, char *error, size_t error_len) {
 
 fail:
     json_free(body);
-    for (size_t i = 0; i < j->reference_count; i++)
-        free((char *)j->references[i].path);
+    job_free_refs(j);
     free(j->prompt);
     free(j);
     return NULL;
